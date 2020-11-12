@@ -1,0 +1,17 @@
+require'pp'
+import'terra2'
+print'hello'
+
+struct S {
+
+}
+
+terra f(a, b)
+
+	var i: int
+
+end
+
+pp(S)
+pp(f)
+
