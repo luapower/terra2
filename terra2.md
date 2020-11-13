@@ -8,7 +8,7 @@ Terra implementation in Lua based on [lx] and [llvm].
 ## Goals
 
 * fix terra bugs and warts that nobody seem to be able or willing to fix
-in the original implementation, and I'm unwillingg to touch that C++ mess.
+in the original implementation, and I'm unwilling to touch that C++ mess.
   * make typechecking lazy again.
   * make overloads automatic again.
   * var decl shadowing like Lua.
