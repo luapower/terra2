@@ -40,12 +40,14 @@ local function expression_function(lx)
 	}
 	local unary_priority = 9 --priority for unary operators
 
-	local function params() --(name: type,...[,...])
+	local function params() --(name:type,...[,...])
 		local tk = expect'('
 		if tk ~= ')' then
 			repeat
 				if tk == '<name>' then
 					next()
+					expect':' --type
+					luaexpr()
 				elseif tk == '...' then
 					next()
 					break
@@ -58,8 +60,11 @@ local function expression_function(lx)
 		expect')'
 	end
 
-	local function body(line, pos) --(params) block end
+	local function body(line, pos) --(params) [:return_type] block end
 		params()
+		if nextif':' then --return type
+			luaexpr()
+		end
 		block()
 		if cur() ~= 'end' then
 			expectmatch('end', 'function', line, pos)
@@ -68,7 +73,7 @@ local function expression_function(lx)
 	end
 
 	local function name()
-		expect'<name>'
+		return expectval'<name>'
 	end
 
 	local function type()
@@ -176,7 +181,7 @@ local function expression_function(lx)
 		return iscall
 	end
 
-	local function expr_simple() --literal|...|{table}|function(params) end|expr_primary
+	local function expr_simple() --literal|...|{table}|expr_primary
 		local tk = cur()
 		if tk == '<number>' or tk == '<imag>' or tk == '<int>' or tk == '<u32>'
 			or tk == '<i64>' or tk == '<u64>' or tk == '<string>' or tk == 'nil'
@@ -185,10 +190,6 @@ local function expression_function(lx)
 			next()
 		elseif tk == '{' then --{table}
 			expr_table()
-		elseif tk == 'function' then --function body
-			local line, pos = line()
-			next()
-			body(line, pos)
 		else
 			expr_primary()
 		end
@@ -309,17 +310,10 @@ local function expression_function(lx)
 			expectmatch('until', 'repeat', line, pos)
 			expr() --parse condition (still inside inner scope).
 			exit_scope()
-		elseif tk == 'function' then --function name[.name...][:name] body
+		elseif tk == 'terra' then --terra name body
 			local line, pos = line()
 			next()
 			name()
-			while tk == '.' do --.name...
-				expr_field()
-				tk = cur()
-			end
-			if tk == ':' then --:name
-				expr_field()
-			end
 			body(line, pos)
 		elseif tk == 'var' then
 			--var name1[:type1],...[=expr1],...
@@ -378,10 +372,9 @@ local function expression_function(lx)
 				return s
 			end, name and {name}
 		elseif kw == 'terra' then
-			local name = stmt and expectval'<name>'
-			params()
-			block()
-			expect'end'
+			local line, pos = line()
+			local name = stmt and name()
+			body(line, pos)
 			return function(env)
 				local f = {type = 'function'}
 				return f

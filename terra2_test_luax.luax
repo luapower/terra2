@@ -6,9 +6,9 @@ struct S {
 
 }
 
-terra f(a, b)
+terra f(a: int, b: int) : {int, bool}
 
-	var i: int
+	var i: int, j: bool = 5, true
 
 end
 

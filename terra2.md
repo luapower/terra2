@@ -1,9 +1,11 @@
 
-<warn>Work-in-progress</warn>
-
 Terra implementation in Lua based on [lx] and [llvm].
 
-Goals:
+## Status
+
+<warn>Work-in-progress</warn>
+
+## Goals
 
 * fix terra bugs and warts that nobody seem to be able or willing to fix
 in the original implementation, and I'm unwillingg to touch that C++ mess.
@@ -20,7 +22,7 @@ in the original implementation, and I'm unwillingg to touch that C++ mess.
 	* ternary operator syntax? `:` can't be used, and iif() macro is meh...
 	* should we add ++, --, +=, -=, *= /=, ^=, >>=, <<= or is it too much?
 
-TODO:
+## TODO
 
 - build libclang into llvm.dll
 - extend LLVM/libclang C APIs
