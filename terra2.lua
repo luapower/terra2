@@ -1,5 +1,34 @@
 
+local tuple = require'tuple'
+local push, pop, concat = table.insert, table.remove, table.concat
+
 local t2 = {}
+
+function t2.struct(t)
+	t.type = 'type'
+	t.kind = 'struct'
+	return t
+end
+
+function t2.type(t)
+	if not t.type then --tuple
+		t = tuple(unpack(t))
+		t.type = 'type'
+		t.kind = 'tuple'
+	end
+	return t
+end
+
+function t2.func(t)
+	t.type = 'func'
+	return t
+end
+
+function t2.functype(t)
+	t.type = 'type'
+	t.kind = 'func'
+	return t
+end
 
 local function expression_function(lx)
 
@@ -9,6 +38,7 @@ local function expression_function(lx)
 	local expect = lx.expect
 	local expectval = lx.expectval
 	local errorexpected = lx.errorexpected
+	local expectmatch = lx.expectmatch
 	local line = lx.line
 	local luaexpr = lx.luaexpr
 
@@ -18,37 +48,95 @@ local function expression_function(lx)
 			or tk == 'until' or tk == '<eof>'
 	end
 
-	local priority = {
-		['^'  ] = {11,10},
-		['*'  ] = {8,8},
-		['/'  ] = {8,8},
-		['%'  ] = {8,8},
-		['+'  ] = {7,7},
-		['-'  ] = {7,7},
-		['..' ] = {6,5},
-		['<<' ] = {4,4},
-		['>>' ] = {4,4},
-		['==' ] = {3,3},
-		['~=' ] = {3,3},
-		['<'  ] = {3,3},
-		['<=' ] = {3,3},
-		['>'  ] = {3,3},
-		['>=' ] = {3,3},
-		['->' ] = {3,2},
-		['and'] = {2,2},
-		['or' ] = {1,1},
+	local unary_priority = {
+		['not'] = 9 * 2,
+		['-'  ] = 9 * 2,
+		['#'  ] = 9 * 2,
 	}
-	local unary_priority = 9 --priority for unary operators
 
-	local function params() --(name:type,...[,...])
+	local binary_priority = {
+		['^'  ] = 10 * 2,
+
+		--unary priority: 9 * 2
+
+		['*'  ] =  8 * 2,
+		['/'  ] =  8 * 2,
+		['%'  ] =  8 * 2,
+
+		['+'  ] =  7 * 2,
+		['-'  ] =  7 * 2,
+
+		['..' ] =  6 * 2,
+
+		['<<' ] =  5 * 2,
+		['>>' ] =  5 * 2,
+		['xor'] =  5 * 2,
+
+		['==' ] =  4 * 2,
+		['~=' ] =  4 * 2,
+		['<'  ] =  4 * 2,
+		['<=' ] =  4 * 2,
+		['>'  ] =  4 * 2,
+		['>=' ] =  4 * 2,
+
+		['->' ] =  3 * 2,
+
+		['and'] =  2 * 2,
+
+		['or' ] =  1 * 2,
+	}
+
+	local right_associative = {
+		['^' ] = true,
+		['..'] = true,
+	}
+
+	local function expectname()
+		return expectval'<name>'
+	end
+
+	local function funcdecl(name) --args_type [-> return_type]
+		local bind_args_type = luaexpr()
+		expect'->'
+		local bind_ret_type = luaexpr()
+		return function(...)
+			return t2.func{
+				name = name,
+				args_type = bind_args_type(...),
+				ret_type = bind_ret_type(...),
+			}
+		end
+	end
+
+	local function bindlist(t)
+		return function(...)
+			while #t > 0 do
+				local bind = pop(t)
+				bind(...)
+			end
+			return t
+		end
+	end
+
+	local function funcdef(name, line, pos)
+
+		--params: (name:type,...[,...])
 		local tk = expect'('
+		local t = {type = 'func', name = name, args = {}}
 		if tk ~= ')' then
 			repeat
 				if tk == '<name>' then
-					next()
-					expect':' --type
-					luaexpr()
+					local name = expectname()
+					expect':'
+					local bind_type = luaexpr()
+					push(t.args, name)
+					push(t.args, false) --type slot
+					local type_slot = #t.args
+					t[#t+1] = function(...)
+						t.args[type_slot] = bind_type(...) or false
+					end
 				elseif tk == '...' then
+					t.vararg = true
 					next()
 					break
 				else
@@ -57,27 +145,68 @@ local function expression_function(lx)
 				tk = nextif','
 			until not tk
 		end
-		expect')'
-	end
+		expectmatch(')', 'terra', line, pos)
 
-	local function body(line, pos) --(params) [:return_type] block end
-		params()
-		if nextif':' then --return type
-			luaexpr()
+		--return type: [:type]
+		if nextif':' then
+			local bind_ret_type = luaexpr()
+			t[#t+1] = function(...)
+				t.ret_type = bind_ret_type(...)
+			end
 		end
-		block()
+
+		--body
+		block(t)
 		if cur() ~= 'end' then
-			expectmatch('end', 'function', line, pos)
+			expectmatch('end', 'terra', line, pos)
 		end
 		next()
+		local bind = bindlist(t)
+		return function(...)
+			return t2.func(bind(...))
+		end
 	end
 
-	local function name()
-		return expectval'<name>'
+	local function struct(name, line, pos)
+		local tk = expect'{'
+		local t = {name = name, fields = {}}
+		while tk ~= '}' do
+			local name = expectname()
+			expect':'
+			local bind_type = luaexpr()
+			push(t.fields, name)
+			push(t.fields, false) --type slot
+			local type_slot = #t.fields
+			t[#t+1] = function(...)
+				t.fields[type_slot] = bind_type(...) or false
+			end
+			tk = nextif','
+			if not tk then break end
+		end
+		expectmatch('}', 'struct', line, pos)
+		local bind = bindlist(t)
+		return function(...)
+			return t2.struct(bind(...))
+		end
 	end
 
 	local function type()
-		luaexpr()
+		local bind_type = luaexpr()
+		if nextif'->' then
+			--TODO: this is wrong: operator priority > than that of `and` and `or`
+			--TODO: remove this after implementing extensible operators.
+			local bind_rettype = luaexpr()
+			return function(...)
+				return t2.functype({
+					args_type = bind_type(...),
+					ret_type  = bind_rettype(...),
+				})
+			end
+		else
+			return function(...)
+				return t2.type(bind_type(...))
+			end
+		end
 	end
 
 	local function ref()
@@ -90,7 +219,7 @@ local function expression_function(lx)
 
 	local function expr_field() --.:name
 		next()
-		name()
+		expectname()
 	end
 
 	local function expr_bracket() --[expr]
@@ -107,7 +236,7 @@ local function expression_function(lx)
 				expr_bracket()
 				expect'='
 			elseif tk == '<name>' and lookahead() == '=' then
-				name()
+				expectname()
 				expect'='
 			end
 			expr()
@@ -167,7 +296,7 @@ local function expression_function(lx)
 				iscall = false
 			elseif tk == ':' then
 				next()
-				name()
+				expectname()
 				args()
 				iscall = true
 			elseif tk == '(' or tk == '<string>' or tk == '{' then
@@ -197,19 +326,19 @@ local function expression_function(lx)
 
 	--parse binary expressions with priority higher than the limit.
 	local function expr_binop(limit)
-		local tk = cur()
-		if tk == 'not' or tk == '-' or tk == '#' then --unary operators
+		local pri = unary_priority[cur()]
+		if pri then --unary operator
 			next()
-			expr_binop(unary_priority)
+			expr_binop(pri)
 		else
 			expr_simple()
 		end
-		local pri = priority[tk]
-		while pri and pri[1] > limit do
+		local pri = binary_priority[tk]
+		while pri and pri > limit do
 			next()
 			--parse binary expression with higher priority.
-			local op = expr_binop(pri[2])
-			pri = priority[op]
+			local op = expr_binop(pri - (right_associative[tk] and 1 or 0))
+			pri = binary_priority[op]
 		end
 		return tk --return unconsumed binary operator (if any).
 	end
@@ -230,7 +359,7 @@ local function expression_function(lx)
 
 	local function label() --::name::
 		next()
-		name()
+		expectname()
 		local tk = expect'::'
 		--recursively parse trailing statements: labels and ';' (Lua 5.2 only).
 		while true do
@@ -283,7 +412,7 @@ local function expression_function(lx)
 			--for name,... in expr,... do block end
 			local line, pos = line()
 			next()
-			name()
+			expectname()
 			local tk = cur()
 			if tk == '=' then -- = expr, expr [,expr]
 				next()
@@ -293,7 +422,7 @@ local function expression_function(lx)
 				if nextif',' then expr() end
 			elseif tk == ',' or tk == 'in' then -- ,name... in expr,...
 				while nextif',' do
-					name()
+					expectname()
 				end
 				expect'in'
 				expr_list()
@@ -310,17 +439,22 @@ local function expression_function(lx)
 			expectmatch('until', 'repeat', line, pos)
 			expr() --parse condition (still inside inner scope).
 			exit_scope()
-		elseif tk == 'terra' then --terra name body
+		elseif tk == 'terra' then --terra name body  |  terra name functype
 			local line, pos = line()
 			next()
-			name()
-			body(line, pos)
+			local name, next_tk = expectname()
+			if next_tk == '::' then
+				next()
+				funcdecl(name)
+			else
+				funcdef(name, line, pos)
+			end
 		elseif tk == 'var' then
 			--var name1[:type1],...[=expr1],...
 			local line, pos = line()
 			next()
 			repeat --name[:type],...
-				name()
+				expectname()
 				if nextif':' then
 					type()
 				end
@@ -342,7 +476,7 @@ local function expression_function(lx)
 			label()
 		elseif tk == 'goto' then --goto name
 			next()
-			name()
+			expectname()
 		elseif not expr_primary() then --function call or assignment
 			assignment()
 		end
@@ -361,25 +495,27 @@ local function expression_function(lx)
 		end
 	end
 
-	return function(_, kw, stmt)
+	return function(_, tk, stmt)
 		next()
-		if kw == 'struct' then
-			local name = stmt and expectval'<name>'
-			expect'{'
-			expect'}'
-			return function(env)
-				local s = {type = 'struct'}
-				return s
-			end, name and {name}
-		elseif kw == 'terra' then
+		if tk == 'struct' then
 			local line, pos = line()
-			local name = stmt and name()
-			body(line, pos)
-			return function(env)
-				local f = {type = 'function'}
-				return f
-			end, name and {name}
-		elseif kw == 'quote' then
+			local name = stmt and expectval'<name>'
+			return struct(name, line, pos), name and {name}
+		elseif tk == 'terra' then
+			local bind
+			local line, pos = line()
+			local name, next_tk
+			if stmt then
+				name, next_tk = expectname()
+			end
+			if next_tk == '::' then
+				next()
+				bind = funcdecl(name)
+			else
+				bind = funcdef(name, line, pos)
+			end
+			return bind, name and {name}
+		elseif tk == 'quote' then
 		end
 		assert(false)
 	end
